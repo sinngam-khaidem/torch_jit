@@ -12,33 +12,9 @@ import torch.nn.functional as F
 
 from layers import ModelSpec, build_model
 from privacy_accounting import compute_epsilon
-from torch_privacy import CustomPrivacyEngine, DPConfig, per_sample_grads_microbatch
+from torch_privacy import CustomPrivacyEngine, DPConfig
 from utils import IMAGE_DATASETS, evaluate_accuracy, get_device, get_image_loader, set_seed
 
-
-def microbatch_dp_step(
-    engine: CustomPrivacyEngine,
-    model: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
-    x: torch.Tensor,
-    y: torch.Tensor,
-    microbatch_size: int,
-) -> Dict[str, float]:
-    optimizer.zero_grad(set_to_none=True)
-    per_sample = per_sample_grads_microbatch(model, x, y, microbatch_size=microbatch_size, loss_fn=F.cross_entropy)
-    noisy = engine.clip_and_aggregate(per_sample, clip_mode="flat", use_compile=False)
-
-    for name, p in model.named_parameters():
-        if p.requires_grad:
-            p.grad = noisy[name]
-    optimizer.step()
-
-    with torch.no_grad():
-        logits = model(x)
-        loss = F.cross_entropy(logits, y)
-        acc = (logits.argmax(dim=1) == y).float().mean()
-
-    return {"loss": loss.item(), "acc": acc.item()}
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,7 +27,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--noise-multiplier", type=float, default=1.1)
     parser.add_argument("--delta", type=float, default=1e-5)
-    parser.add_argument("--microbatch-size", type=int, default=8)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
@@ -113,9 +88,7 @@ def main() -> None:
             x = x.to(device)
             y = y.to(device)
 
-            if method == "dpsgd_microbatch":
-                stats = microbatch_dp_step(engine, model, optimizer, x, y, microbatch_size=args.microbatch_size)
-            elif method == "dpsgd_vmap":
+            if method == "dpsgd_vmap":
                 stats = engine.dp_step(x, y, optimizer, loss_fn=F.cross_entropy, use_compile=False)
             else:
                 stats = engine.dp_step(x, y, optimizer, loss_fn=F.cross_entropy, use_compile=True)
@@ -126,9 +99,7 @@ def main() -> None:
             x = x.to(device)
             y = y.to(device)
 
-            if method == "dpsgd_microbatch":
-                stats = microbatch_dp_step(engine, model, optimizer, x, y, microbatch_size=args.microbatch_size)
-            elif method == "dpsgd_vmap":
+            if method == "dpsgd_vmap":
                 stats = engine.dp_step(x, y, optimizer, loss_fn=F.cross_entropy, use_compile=False)
             else:
                 stats = engine.dp_step(x, y, optimizer, loss_fn=F.cross_entropy, use_compile=True)

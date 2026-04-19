@@ -1,7 +1,3 @@
-"""Model and layer definitions used for VMAP/JIT-friendly DP-SGD experiments."""
-
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Optional, Tuple, List, Dict
 
