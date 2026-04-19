@@ -53,7 +53,6 @@ def main() -> None:
     )
 
     methods = [
-        "dpsgd_microbatch",
         "dpsgd_vmap",
         "dpsgd_vmap_compile",
     ]
