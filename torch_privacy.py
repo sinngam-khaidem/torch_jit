@@ -82,8 +82,6 @@ class DPConfig:
     max_grad_norm: float = 1.0
     noise_multiplier: float = 1.0
     vmap_chunk_size: Optional[int] = 32
-    poisson_sampling: bool = False
-    sample_rate: float = 1.0
     force_compile_mps: bool = True
 
 
@@ -231,18 +229,6 @@ class CustomPrivacyEngine:
         )
         return {name: g for name, g in zip(self.param_names, noisy)}
 
-    def poisson_subsample(self, x, y, sample_rate: Optional[float] = None):
-        q = self.config.sample_rate if sample_rate is None else sample_rate
-        q = float(max(0.0, min(1.0, q)))
-        if q == 1.0:
-            return x, y
-
-        mask = torch.rand(x.size(0), device=x.device) < q
-        if mask.sum().item() == 0:
-            # Keep at least one sample to avoid an empty step.
-            idx = torch.randint(0, x.size(0), (1,), device=x.device)
-            return x[idx], y[idx]
-        return x[mask], y[mask]
 
     def dp_step(
         self,
@@ -252,8 +238,6 @@ class CustomPrivacyEngine:
         loss_fn=None,
         clip_mode: str = "flat",
         use_compile: bool = False,
-        poisson_sampling: Optional[bool] = None,
-        sample_rate: Optional[float] = None,
     ):
         """
         Args:
@@ -263,24 +247,18 @@ class CustomPrivacyEngine:
             - loss_fn: Loss function to compute per-sample losses (default: cross-entropy).
             - clip_mode: "flat" or "layerwise" clipping strategy.
             - use_compile: Whether to use torch.compile for the aggregation step.
-            - poisson_sampling: Whether to apply Poisson subsampling (overrides config if not None).
-            - sample_rate: Sample rate for Poisson subsampling (overrides config if not None).
         Returns:
             A dictionary containing the batch loss, accuracy, and batch size.
         
         """
         loss_fn = loss_fn or F.cross_entropy
 
-        use_poisson = self.config.poisson_sampling if poisson_sampling is None else poisson_sampling
-        if use_poisson:
-            x, y = self.poisson_subsample(x, y, sample_rate=sample_rate)
-
         used_compiled = False
 
         # Attempt to use the compiled DP step if enabled and not previously failed for this clip mode.
         if use_compile and clip_mode not in self._compiled_step_failed:
             try:
-                params = {k: v.detach().clone() for k, v in self.model.named_parameters()}
+                params = {k: v.detach() for k, v in self.model.named_parameters()}
                 buffers = {k: v for k, v in self.model.named_buffers()}
 
                 lr = float(optimizer.param_groups[0].get("lr", 0.0))
@@ -295,15 +273,17 @@ class CustomPrivacyEngine:
                     float(self.config.noise_multiplier),
                     lr,
                 )
-
+                
                 for name, param in self.model.named_parameters():
+                    # print(f"Updating param: {name}, requires_grad={param.requires_grad}")
                     if param.requires_grad:
                         param.data.copy_(updated[name])
 
                 used_compiled = True
-                # print(f"Used compiled DP step for clip_mode={clip_mode}")
+                #print(f"Used compiled DP step for clip_mode={clip_mode}")
             except Exception as e:
                 print(f"Compiled DP step failed for clip_mode={clip_mode}, falling back to eager. Exception: {e}")
+                print(e.print_stack())
                 self._compiled_step_failed.add(clip_mode)
                 used_compiled = False
 
@@ -319,7 +299,7 @@ class CustomPrivacyEngine:
                     param.grad = noisy_grads[name]
 
             optimizer.step()
-            # print(f"Used eager DP step for clip_mode={clip_mode}")
+            #print(f"Used eager DP step for clip_mode={clip_mode}")
         
         with torch.no_grad():
             logits = self.model(x)
@@ -334,47 +314,9 @@ class CustomPrivacyEngine:
     
 
 
-
-def per_sample_grads_loop(model, x, y, loss_fn=None):
-    """Reference implementation: explicit Python loop over individual samples."""
-    loss_fn = loss_fn or F.cross_entropy
-    params = list(model.named_parameters())
-    grad_buckets = {name: [] for name, _ in params}
-
-    for i in range(x.size(0)):
-        logits = model(x[i : i + 1])
-        loss = loss_fn(logits, y[i : i + 1])
-        grads = torch.autograd.grad(loss, [p for _, p in params], retain_graph=False, create_graph=False)
-        for (name, _), g in zip(params, grads):
-            grad_buckets[name].append(g.detach())
-
-    return {name: torch.stack(chunks, dim=0) for name, chunks in grad_buckets.items()}
-
-
-def per_sample_grads_microbatch(model, x, y, microbatch_size: int = 8, loss_fn=None):
-    """Microbatch fallback: per-sample grads computed chunk by chunk."""
-    loss_fn = loss_fn or F.cross_entropy
-    params = list(model.named_parameters())
-    grad_buckets = {name: [] for name, _ in params}
-
-    for start in range(0, x.size(0), microbatch_size):
-        xb = x[start : start + microbatch_size]
-        yb = y[start : start + microbatch_size]
-        for i in range(xb.size(0)):
-            logits = model(xb[i : i + 1])
-            loss = loss_fn(logits, yb[i : i + 1])
-            grads = torch.autograd.grad(loss, [p for _, p in params], retain_graph=False, create_graph=False)
-            for (name, _), g in zip(params, grads):
-                grad_buckets[name].append(g.detach())
-
-    return {name: torch.stack(chunks, dim=0) for name, chunks in grad_buckets.items()}
-
-
 __all__ = [
     "DPConfig",
     "CustomPrivacyEngine",
-    "per_sample_grads_loop",
-    "per_sample_grads_microbatch",
 ]
 
 

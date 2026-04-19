@@ -54,8 +54,8 @@ def rnn_layer(
     use_tanh: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
-    W = params["W"].to(x.device)   # [input + hidden, hidden]
-    b = params["b"].to(x.device)   # [hidden]
+    W = params["W"]  # [input + hidden, hidden]
+    b = params["b"]  # [hidden]
 
     B, T, _ = x.shape
     H = b.shape[0]
@@ -91,8 +91,8 @@ def lstm_layer(
     state: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
 ):
 
-    W = params["W"].to(x.device)   # [input + hidden, 4H]
-    b = params["b"].to(x.device)
+    W = params["W"] # [input + hidden, 4H]
+    b = params["b"]  # [4H]
 
     B, T, _ = x.shape
     H = b.shape[0] // 4
@@ -133,8 +133,8 @@ def gru_layer(
     h0: Optional[torch.Tensor] = None,
 ):
 
-    W = params["W"].to(x.device)   # [input + hidden, 3H]
-    b = params["b"].to(x.device)
+    W = params["W"] # [input + hidden, 3H]
+    b = params["b"]  # [3H]
 
     B, T, _ = x.shape
     H = b.shape[0] // 3
@@ -288,12 +288,7 @@ class SequenceClassifier(nn.Module):
         else:
             rep = final_state
         return self.classifier(rep)
-    
 
-    def __repr__(self):
-        base = super().__repr__()
-        rnn_info = f"\n  (recurrent): Functional {self.layer_type.upper()} Layer"
-        return base + rnn_info
 
 
 class AttentionClassifier(nn.Module):
