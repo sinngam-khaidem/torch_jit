@@ -14,6 +14,7 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Subset, TensorDataset
 
 
+# Specs template for image datasets.
 @dataclass
 class DatasetSpec:
     name: str
@@ -188,14 +189,3 @@ __all__ = [
     "now",
 ]
 
-
-if __name__ == "__main__":
-    class Config:
-        batch_size = 32
-        train_subset = 512
-        test_subset = 256
-
-    cfg = Config()
-    trainloader, testloader = get_mnist_loader(cfg)
-    print(f"Train batches: {len(trainloader)}")
-    print(f"Test batches: {len(testloader)}")

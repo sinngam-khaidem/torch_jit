@@ -19,7 +19,7 @@ VMAP + `torch.compile` DP-SGD pipeline with:
 ## Quick start
 
 ```bash
-python evaluate.py --datasets mnist,cifar10,fakedata --max-steps 10
+python evaluate.py --datasets mnist,cifar10 --max-steps 10
 python benchmark_layers.py --max-steps 10 --warmup-steps 3
 python vit_benchmark.py --dataset fakedata --max-steps 10 --warmup-steps 3
 python alternatives_dp.py --dataset mnist --model cnn --max-steps 10
