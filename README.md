@@ -6,7 +6,7 @@ VMAP + `torch.compile` DP-SGD pipeline with:
 - Contains scripts for accuracy and privacy accounting.
 - Diagnostic scripts for per-sample gradient techniques & JIT compilation using torch._dynamo.explain.
 
-![Evaluation of MLP, CNN and VIT on MNIST and CIFAR10](torch-jit/Resources/report_100_steps.png)
+![Evaluation of MLP, CNN and VIT on MNIST and CIFAR10](/torch-jit/Resources/report_100_steps.png)
 
 ## Main files
 
