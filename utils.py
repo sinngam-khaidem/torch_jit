@@ -1,7 +1,3 @@
-"""Shared utilities for data loading, reproducibility, and evaluation."""
-
-from __future__ import annotations
-
 import random
 import time
 from dataclasses import dataclass

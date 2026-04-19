@@ -1,7 +1,3 @@
-"""ViT-focused benchmark to show speedups from vmap + torch.compile DP-SGD."""
-
-from __future__ import annotations
-
 import argparse
 import itertools
 import time

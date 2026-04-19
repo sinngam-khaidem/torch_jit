@@ -6,6 +6,8 @@ VMAP + `torch.compile` DP-SGD pipeline with:
 - Contains scripts for accuracy and privacy accounting.
 - Diagnostic scripts for per-sample gradient techniques & JIT compilation using torch._dynamo.explain.
 
+![Evaluation of MLP, CNN and VIT on MNIST and CIFAR10](torch-jit/Resources/report_100_steps.png)
+
 ## Main files
 
 - `layers.py`: model and layer definitions.
@@ -16,12 +18,10 @@ VMAP + `torch.compile` DP-SGD pipeline with:
 - `vit_benchmark.py`: Benchmarking script for TinyViT.
 - `diagnostic.py`: per-sample gradient method & jit compilation.
 
-## Quick start
+## Running guide
 
 ```bash
 python evaluate.py --datasets mnist,cifar10 --max-steps 10
 python benchmark_layers.py --max-steps 10 --warmup-steps 3
 python vit_benchmark.py --dataset fakedata --max-steps 10 --warmup-steps 3
-python alternatives_dp.py --dataset mnist --model cnn --max-steps 10
-python diagnostic.py --model lstm --batch-size 16
 ```
