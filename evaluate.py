@@ -1,7 +1,3 @@
-"""End-to-end benchmark: runtime, accuracy, and privacy accounting across datasets/models."""
-
-from __future__ import annotations
-
 import argparse
 import time
 from typing import Dict, List, Tuple
@@ -72,8 +68,6 @@ def train_private(
             max_grad_norm=max_grad_norm,
             noise_multiplier=noise_multiplier,
             vmap_chunk_size=vmap_chunk_size,
-            poisson_sampling=False,
-            sample_rate=1.0,
         ),
     )
 
@@ -91,8 +85,7 @@ def train_private(
             optimizer,
             loss_fn=F.cross_entropy,
             clip_mode="flat",
-            use_compile=use_compile,
-            poisson_sampling=False,
+            use_compile=use_compile
         )
 
         losses.append(stats["loss"])
