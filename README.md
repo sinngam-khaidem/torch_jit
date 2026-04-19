@@ -1,12 +1,14 @@
 # JIT Accelerated DP-SGD in PyTorch
 
-VMAP + `torch.compile` DP-SGD pipeline with:
+VMAP + `torch.compile` DP-SGD pipeline.
 
-- We implemented JIT and VMAP friendly layer and models of MLP, CNN, RNN, GRU, LSTM, MultiheadAttention and ViT.
+- We implemented JIT and VMAP based DPSGD Update that integrates with most of the existing components/modules within PyTorch.
+- Custom layers/models of MLP, CNN, RNN, GRU, LSTM, MultiheadAttention and ViT for JIT compatibility.
 - Contains scripts for accuracy and privacy accounting.
-- Diagnostic scripts for per-sample gradient techniques & JIT compilation using torch._dynamo.explain.
 
 ![Evaluation of MLP, CNN and VIT on MNIST and CIFAR10](/torch-jit/Resources/report_100_steps.png)
+
+**Note: JIT Compilation for RNN, GRU, LSTM, MultiheadAttention and ViT only works on CUDA.**
 
 ## Main files
 
@@ -16,7 +18,6 @@ VMAP + `torch.compile` DP-SGD pipeline with:
 - `evaluate.py`: multi-dataset benchmark (MNIST/CIFAR10)
 - `benchmark_seq_layers.py`: Benchmarking script for sequential/recurrent layers.
 - `vit_benchmark.py`: Benchmarking script for TinyViT.
-- `diagnostic.py`: per-sample gradient method & jit compilation.
 
 ## Running guide
 
