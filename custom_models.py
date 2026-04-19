@@ -443,16 +443,3 @@ def build_model(spec: ModelSpec) -> nn.Module:
     raise ValueError(f"Unsupported model name: {spec.model_name}")
 
 
-__all__ = [
-    "MLP",
-    "SmallCNN",
-    "VMAPFriendlyRNNLayer",
-    "VMAPFriendlyLSTMLayer",
-    "VMAPFriendlyGRULayer",
-    "VMAPFriendlyMultiHeadAttention",
-    "SequenceClassifier",
-    "AttentionClassifier",
-    "TinyViT",
-    "ModelSpec",
-    "build_model",
-]

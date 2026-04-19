@@ -1,5 +1,3 @@
-"""Benchmark VMAP/JIT-friendly recurrent and attention layers under DP-SGD."""
-
 import argparse
 import itertools
 import time
@@ -7,7 +5,7 @@ import time
 import torch
 import torch.nn.functional as F
 
-from layers import ModelSpec, build_model
+from custom_models import ModelSpec, build_model
 from privacy_accounting import compute_epsilon
 from torch_privacy import CustomPrivacyEngine, DPConfig
 from utils import evaluate_accuracy, get_device, get_synthetic_sequence_loader, set_seed

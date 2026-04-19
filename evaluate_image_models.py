@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from rich.console import Console
 from rich.table import Table
 
-from layers import ModelSpec, build_model
+from custom_models import ModelSpec, build_model
 from privacy_accounting import compute_epsilon
 from torch_privacy import CustomPrivacyEngine, DPConfig
 from utils import IMAGE_DATASETS, evaluate_accuracy, get_device, get_image_loader, set_seed
