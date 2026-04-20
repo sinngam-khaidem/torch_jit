@@ -29,6 +29,6 @@ python vit_benchmark.py --dataset fakedata --max-steps 10 --warmup-steps 3
 
 
 ## References
-https://docs.pytorch.org/docs/stable/func.html
-https://docs.pytorch.org/docs/stable/generated/torch.vmap.html
-https://docs.pytorch.org/tutorials/intermediate/per_sample_grads.html
+https://docs.pytorch.org/docs/stable/func.html\
+https://docs.pytorch.org/docs/stable/generated/torch.vmap.html\
+https://docs.pytorch.org/tutorials/intermediate/per_sample_grads.html\
