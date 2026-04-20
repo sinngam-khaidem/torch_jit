@@ -3,14 +3,19 @@ import time
 
 import numpy as np
 import torch
+
+import haiku as hk
 import jax
 import jax.numpy as jnp
+from jax import grad, jit, random, vmap
+from jax.tree_util import tree_flatten, tree_unflatten
+
 
 from custom_models import ModelSpec
 
 
 def jax_available():
-    return jax is not None and jnp is not None
+    return True
 
 
 def require_jax():
@@ -18,232 +23,79 @@ def require_jax():
         raise SystemExit("JAX is required for the 'jax' method. Install jax and jaxlib.")
 
 
-def _init_linear(key, in_dim, out_dim, scale=0.02):
-    w_key, _ = jax.random.split(key)
-    w = scale * jax.random.normal(w_key, (in_dim, out_dim))
-    b = jnp.zeros((out_dim,))
-    return {"w": w, "b": b}
+def _haiku_mlp(features, num_classes):
+    x = hk.Flatten()(features)
+    x = hk.Linear(256)(x)
+    x = jax.nn.relu(x)
+    x = hk.Linear(128)(x)
+    x = jax.nn.relu(x)
+    return hk.Linear(num_classes)(x)
 
 
-def _linear(params, x):
-    return x @ params["w"] + params["b"]
+def _haiku_cnn(features, num_classes):
+    return hk.Sequential(
+        [
+            hk.Conv2D(16, (8, 8), padding="SAME", stride=(2, 2)),
+            jax.nn.relu,
+            hk.MaxPool(2, 1, padding="VALID"),
+            hk.Conv2D(32, (4, 4), padding="VALID", stride=(2, 2)),
+            jax.nn.relu,
+            hk.MaxPool(2, 1, padding="VALID"),
+            hk.Flatten(),
+            hk.Linear(32),
+            jax.nn.relu,
+            hk.Linear(num_classes),
+        ]
+    )(features)
 
 
-def _layer_norm(params, x, eps=1e-5):
-    mean = jnp.mean(x, axis=-1, keepdims=True)
-    var = jnp.mean((x - mean) ** 2, axis=-1, keepdims=True)
-    return (x - mean) / jnp.sqrt(var + eps) * params["g"] + params["b"]
-
-
-def _init_layer_norm(key, dim):
-    return {"g": jnp.ones((dim,)), "b": jnp.zeros((dim,))}
-
-
-def _conv2d(params, x, stride=1):
-    y = jax.lax.conv_general_dilated(
-        x,
-        params["w"],
-        window_strides=(stride, stride),
-        padding="SAME",
-        dimension_numbers=("NHWC", "HWIO", "NHWC"),
-    )
-    return y + params["b"]
-
-
-def _max_pool(x, size=2, stride=2):
-    return jax.lax.reduce_window(
-        x,
-        -jnp.inf,
-        jax.lax.max,
-        window_dimensions=(1, size, size, 1),
-        window_strides=(1, stride, stride, 1),
-        padding="SAME",
-    )
-
-
-def _init_mlp_params(key, input_shape, num_classes):
-    c, h, w = input_shape
-    in_features = c * h * w
-    k1, k2, k3 = jax.random.split(key, 3)
-    return {
-        "fc1": _init_linear(k1, in_features, 256),
-        "fc2": _init_linear(k2, 256, 128),
-        "fc3": _init_linear(k3, 128, num_classes),
-    }
-
-
-def _apply_mlp(params, x):
-    x = x.reshape((x.shape[0], -1))
-    x = jax.nn.relu(_linear(params["fc1"], x))
-    x = jax.nn.relu(_linear(params["fc2"], x))
-    return _linear(params["fc3"], x)
-
-
-def _init_cnn_params(key, in_channels, image_size, num_classes):
-    k1, k2, k3, k4 = jax.random.split(key, 4)
-    pooled = image_size // 4
-    return {
-        "conv1": {"w": 0.02 * jax.random.normal(k1, (3, 3, in_channels, 32)), "b": jnp.zeros((32,))},
-        "conv2": {"w": 0.02 * jax.random.normal(k2, (3, 3, 32, 64)), "b": jnp.zeros((64,))},
-        "fc1": _init_linear(k3, 64 * pooled * pooled, 128),
-        "fc2": _init_linear(k4, 128, num_classes),
-    }
-
-
-def _apply_cnn(params, x):
-    x = jax.nn.relu(_conv2d(params["conv1"], x))
-    x = _max_pool(x, 2, 2)
-    x = jax.nn.relu(_conv2d(params["conv2"], x))
-    x = _max_pool(x, 2, 2)
-    x = x.reshape((x.shape[0], -1))
-    x = jax.nn.relu(_linear(params["fc1"], x))
-    return _linear(params["fc2"], x)
-
-
-def _init_rnn_params(key, input_dim, hidden_dim, num_classes):
-    k1, k2, k3, k4 = jax.random.split(key, 4)
-    return {
-        "rnn": {
-            "wx": 0.02 * jax.random.normal(k1, (input_dim, hidden_dim)),
-            "wh": 0.02 * jax.random.normal(k2, (hidden_dim, hidden_dim)),
-            "b": jnp.zeros((hidden_dim,)),
-        },
-        "head": _init_linear(k3, hidden_dim, num_classes),
-        "ln": _init_layer_norm(k4, hidden_dim),
-    }
-
-
-def _apply_rnn(params, x):
-    wx = params["rnn"]["wx"]
-    wh = params["rnn"]["wh"]
-    b = params["rnn"]["b"]
-    hidden_dim = b.shape[0]
+def _haiku_rnn(features, hidden_dim, num_classes):
+    input_proj = hk.Linear(hidden_dim)
+    hidden_proj = hk.Linear(hidden_dim, with_bias=False)
 
     def step(h, x_t):
-        h = jnp.tanh(x_t @ wx + h @ wh + b)
+        h = jnp.tanh(input_proj(x_t) + hidden_proj(h))
         return h, h
 
-    h0 = jnp.zeros((x.shape[0], hidden_dim))
-    _, h_seq = jax.lax.scan(step, h0, jnp.swapaxes(x, 0, 1))
+    h0 = jnp.zeros((features.shape[0], hidden_dim))
+    _, h_seq = jax.lax.scan(step, h0, jnp.swapaxes(features, 0, 1))
     h_final = h_seq[-1]
-    h_final = _layer_norm(params["ln"], h_final)
-    return _linear(params["head"], h_final)
+    return hk.Linear(num_classes)(h_final)
 
 
-def _init_gru_params(key, input_dim, hidden_dim, num_classes):
-    k1, k2, k3 = jax.random.split(key, 3)
-    return {
-        "gru": {
-            "wx": 0.02 * jax.random.normal(k1, (input_dim, 3 * hidden_dim)),
-            "wh": 0.02 * jax.random.normal(k2, (hidden_dim, 3 * hidden_dim)),
-            "b": jnp.zeros((3 * hidden_dim,)),
-        },
-        "head": _init_linear(k3, hidden_dim, num_classes),
-    }
+def _haiku_gru(features, hidden_dim, num_classes):
+    core = hk.GRU(hidden_dim)
+    h0 = core.initial_state(features.shape[0])
+    outs, _ = hk.dynamic_unroll(core, features, h0, time_major=False)
+    h_final = outs[:, -1, :]
+    return hk.Linear(num_classes)(h_final)
 
 
-def _apply_gru(params, x):
-    wx = params["gru"]["wx"]
-    wh = params["gru"]["wh"]
-    b = params["gru"]["b"]
-    hidden_dim = b.shape[0] // 3
-
-    def step(h, x_t):
-        x_gates = x_t @ wx
-        h_gates = h @ wh
-        r_x, z_x, n_x = jnp.split(x_gates, 3, axis=-1)
-        r_h, z_h, n_h = jnp.split(h_gates, 3, axis=-1)
-        r_b, z_b, n_b = jnp.split(b, 3, axis=-1)
-        r = jax.nn.sigmoid(r_x + r_h + r_b)
-        z = jax.nn.sigmoid(z_x + z_h + z_b)
-        n = jnp.tanh(n_x + r * n_h + n_b)
-        h = (1.0 - z) * n + z * h
-        return h, h
-
-    h0 = jnp.zeros((x.shape[0], hidden_dim))
-    _, h_seq = jax.lax.scan(step, h0, jnp.swapaxes(x, 0, 1))
-    h_final = h_seq[-1]
-    return _linear(params["head"], h_final)
+def _haiku_lstm(features, hidden_dim, num_classes):
+    core = hk.LSTM(hidden_dim)
+    h0 = core.initial_state(features.shape[0])
+    outs, _ = hk.dynamic_unroll(core, features, h0, time_major=False)
+    h_final = outs[:, -1, :]
+    return hk.Linear(num_classes)(h_final)
 
 
-def _init_lstm_params(key, input_dim, hidden_dim, num_classes):
-    k1, k2, k3 = jax.random.split(key, 3)
-    return {
-        "lstm": {
-            "wx": 0.02 * jax.random.normal(k1, (input_dim, 4 * hidden_dim)),
-            "wh": 0.02 * jax.random.normal(k2, (hidden_dim, 4 * hidden_dim)),
-            "b": jnp.zeros((4 * hidden_dim,)),
-        },
-        "head": _init_linear(k3, hidden_dim, num_classes),
-    }
+def _haiku_mha(features, embed_dim, num_heads, num_classes):
+    x = hk.Linear(embed_dim)(features)
+    key_size = max(1, embed_dim // num_heads)
+    attn = hk.MultiHeadAttention(
+        num_heads=num_heads,
+        key_size=key_size,
+        model_size=embed_dim,
+        w_init=hk.initializers.VarianceScaling(1.0, "fan_avg", "uniform"),
+    )
+    x = attn(x, x, x)
+    x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
+    pooled = jnp.mean(x, axis=1)
+    return hk.Linear(num_classes)(pooled)
 
 
-def _apply_lstm(params, x):
-    wx = params["lstm"]["wx"]
-    wh = params["lstm"]["wh"]
-    b = params["lstm"]["b"]
-    hidden_dim = b.shape[0] // 4
-
-    def step(state, x_t):
-        h, c = state
-        gates = x_t @ wx + h @ wh + b
-        i, f, g, o = jnp.split(gates, 4, axis=-1)
-        i = jax.nn.sigmoid(i)
-        f = jax.nn.sigmoid(f)
-        g = jnp.tanh(g)
-        o = jax.nn.sigmoid(o)
-        c = f * c + i * g
-        h = o * jnp.tanh(c)
-        return (h, c), h
-
-    h0 = jnp.zeros((x.shape[0], hidden_dim))
-    c0 = jnp.zeros((x.shape[0], hidden_dim))
-    (_, _), h_seq = jax.lax.scan(step, (h0, c0), jnp.swapaxes(x, 0, 1))
-    h_final = h_seq[-1]
-    return _linear(params["head"], h_final)
-
-
-def _init_mha_params(key, input_dim, embed_dim, num_heads, num_classes):
-    k1, k2, k3, k4, k5 = jax.random.split(key, 5)
-    return {
-        "q": _init_linear(k1, input_dim, embed_dim),
-        "k": _init_linear(k2, input_dim, embed_dim),
-        "v": _init_linear(k3, input_dim, embed_dim),
-        "o": _init_linear(k4, embed_dim, embed_dim),
-        "head": _init_linear(k5, embed_dim, num_classes),
-    }
-
-
-def _apply_mha(params, x, num_heads):
-    embed_dim = params["o"]["w"].shape[0]
-    head_dim = embed_dim // num_heads
-
-    q = _linear(params["q"], x)
-    k = _linear(params["k"], x)
-    v = _linear(params["v"], x)
-
-    def reshape_heads(y):
-        b, t, _ = y.shape
-        y = y.reshape((b, t, num_heads, head_dim))
-        return jnp.transpose(y, (0, 2, 1, 3))
-
-    qh = reshape_heads(q)
-    kh = reshape_heads(k)
-    vh = reshape_heads(v)
-
-    scale = head_dim ** -0.5
-    attn = jnp.einsum("bhqd,bhkd->bhqk", qh, kh) * scale
-    attn = jax.nn.softmax(attn, axis=-1)
-    ctx = jnp.einsum("bhqk,bhkd->bhqd", attn, vh)
-    ctx = jnp.transpose(ctx, (0, 2, 1, 3)).reshape((x.shape[0], x.shape[1], embed_dim))
-
-    out = _linear(params["o"], ctx)
-    pooled = jnp.mean(out, axis=1)
-    return _linear(params["head"], pooled)
-
-
-def _init_vit_params(
-    key,
+def _haiku_vit(
+    features,
     image_size,
     patch_size,
     in_channels,
@@ -252,207 +104,175 @@ def _init_vit_params(
     num_heads,
     num_classes,
 ):
-    keys = jax.random.split(key, 4 + depth * 8)
-    num_patches = (image_size // patch_size) ** 2
-    params = {
-        "patch": _init_linear(keys[0], patch_size * patch_size * in_channels, embed_dim),
-        "cls": jax.random.normal(keys[1], (1, 1, embed_dim)) * 0.02,
-        "pos": jax.random.normal(keys[2], (1, num_patches + 1, embed_dim)) * 0.02,
-        "blocks": [],
-        "head": _init_linear(keys[3], embed_dim, num_classes),
-    }
+    if image_size % patch_size != 0:
+        raise ValueError("image_size must be divisible by patch_size")
 
-    idx = 4
-    for _ in range(depth):
-        block = {
-            "ln1": _init_layer_norm(keys[idx], embed_dim),
-            "q": _init_linear(keys[idx + 1], embed_dim, embed_dim),
-            "k": _init_linear(keys[idx + 2], embed_dim, embed_dim),
-            "v": _init_linear(keys[idx + 3], embed_dim, embed_dim),
-            "o": _init_linear(keys[idx + 4], embed_dim, embed_dim),
-            "ln2": _init_layer_norm(keys[idx + 5], embed_dim),
-            "mlp1": _init_linear(keys[idx + 6], embed_dim, embed_dim * 4),
-            "mlp2": _init_linear(keys[idx + 7], embed_dim * 4, embed_dim),
-        }
-        params["blocks"].append(block)
-        idx += 8
-    return params
+    x = hk.Conv2D(embed_dim, kernel_shape=patch_size, stride=patch_size, padding="VALID")(features)
+    x = x.reshape((x.shape[0], -1, embed_dim))
+    num_patches = x.shape[1]
 
-
-def _apply_vit(
-    params,
-    x,
-    patch_size,
-    num_heads,
-    embed_dim,
-):
-    b, h, w, c = x.shape
-    p = patch_size
-    x = x.reshape(b, h // p, p, w // p, p, c)
-    x = jnp.transpose(x, (0, 1, 3, 2, 4, 5))
-    x = x.reshape(b, -1, p * p * c)
-
-    x = _linear(params["patch"], x)
-    cls = jnp.repeat(params["cls"], b, axis=0)
+    cls = hk.get_parameter("cls", shape=(1, 1, embed_dim), init=hk.initializers.TruncatedNormal(stddev=0.02))
+    pos = hk.get_parameter(
+        "pos",
+        shape=(1, num_patches + 1, embed_dim),
+        init=hk.initializers.TruncatedNormal(stddev=0.02),
+    )
+    cls = jnp.repeat(cls, x.shape[0], axis=0)
     x = jnp.concatenate([cls, x], axis=1)
-    x = x + params["pos"][:, : x.shape[1], :]
+    x = x + pos[:, : x.shape[1], :]
 
-    head_dim = embed_dim // num_heads
+    for i in range(depth):
+        x_norm = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True, name=f"ln1_{i}")(x)
+        key_size = max(1, embed_dim // num_heads)
+        attn = hk.MultiHeadAttention(
+            num_heads=num_heads,
+            key_size=key_size,
+            model_size=embed_dim,
+            name=f"attn_{i}",
+            w_init=hk.initializers.VarianceScaling(1.0, "fan_avg", "uniform"),
+        )
+        x = x + attn(x_norm, x_norm, x_norm)
 
-    for block in params["blocks"]:
-        y = _layer_norm(block["ln1"], x)
-        q = _linear(block["q"], y)
-        k = _linear(block["k"], y)
-        v = _linear(block["v"], y)
-
-        def reshape_heads(y):
-            y = y.reshape((b, y.shape[1], num_heads, head_dim))
-            return jnp.transpose(y, (0, 2, 1, 3))
-
-        qh = reshape_heads(q)
-        kh = reshape_heads(k)
-        vh = reshape_heads(v)
-
-        scale = head_dim ** -0.5
-        attn = jnp.einsum("bhqd,bhkd->bhqk", qh, kh) * scale
-        attn = jax.nn.softmax(attn, axis=-1)
-        ctx = jnp.einsum("bhqk,bhkd->bhqd", attn, vh)
-        ctx = jnp.transpose(ctx, (0, 2, 1, 3)).reshape((b, x.shape[1], embed_dim))
-
-        attn_out = _linear(block["o"], ctx)
-        x = x + attn_out
-
-        y = _layer_norm(block["ln2"], x)
-        y = jax.nn.gelu(_linear(block["mlp1"], y))
-        y = _linear(block["mlp2"], y)
+        y = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True, name=f"ln2_{i}")(x)
+        y = hk.Linear(embed_dim * 4, name=f"mlp1_{i}")(y)
+        y = jax.nn.gelu(y)
+        y = hk.Linear(embed_dim, name=f"mlp2_{i}")(y)
         x = x + y
 
-    cls_out = x[:, 0, :]
-    return _linear(params["head"], cls_out)
+    x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True, name="ln_out")(x)
+    return hk.Linear(num_classes, name="head")(x[:, 0])
 
 
-def _jax_model_factory(
-    model_name,
-    spec,
-    key,
-):
-    
-    """
-    Args:
-    - model_name: One of "mlp", "cnn", "rnn", "lstm", "gru", "mha", "vit"
-    - spec: ModelSpec object with appropriate fields filled based on model type
-    - key: JAX random key for parameter initialization
-    """
+def _build_haiku_model(model_name, spec):
     name = model_name.lower()
-
     if name == "mlp":
-        params = _init_mlp_params(key, (spec.in_channels, spec.image_size, spec.image_size), spec.num_classes)
-        return params, _apply_mlp, (spec.in_channels, spec.image_size, spec.image_size)
+        return hk.transform(lambda x: _haiku_mlp(x, spec.num_classes))
     if name == "cnn":
-        params = _init_cnn_params(key, spec.in_channels, spec.image_size, spec.num_classes)
-        return params, _apply_cnn, (spec.in_channels, spec.image_size, spec.image_size)
+        return hk.transform(lambda x: _haiku_cnn(x, spec.num_classes))
     if name == "rnn":
-        params = _init_rnn_params(key, spec.seq_input_dim, spec.seq_hidden_dim, spec.num_classes)
-        return params, _apply_rnn, (spec.seq_len, spec.seq_input_dim)
-    if name == "lstm":
-        params = _init_lstm_params(key, spec.seq_input_dim, spec.seq_hidden_dim, spec.num_classes)
-        return params, _apply_lstm, (spec.seq_len, spec.seq_input_dim)
+        return hk.transform(lambda x: _haiku_rnn(x, spec.seq_hidden_dim, spec.num_classes))
     if name == "gru":
-        params = _init_gru_params(key, spec.seq_input_dim, spec.seq_hidden_dim, spec.num_classes)
-        return params, _apply_gru, (spec.seq_len, spec.seq_input_dim)
+        return hk.transform(lambda x: _haiku_gru(x, spec.seq_hidden_dim, spec.num_classes))
+    if name == "lstm":
+        return hk.transform(lambda x: _haiku_lstm(x, spec.seq_hidden_dim, spec.num_classes))
     if name == "mha":
-        num_heads = 4
-        params = _init_mha_params(key, spec.seq_input_dim, spec.seq_hidden_dim, num_heads, spec.num_classes)
-        apply_fn = lambda p, x: _apply_mha(p, x, num_heads=num_heads)
-        return params, apply_fn, (spec.seq_len, spec.seq_input_dim)
+        return hk.transform(lambda x: _haiku_mha(x, spec.seq_hidden_dim, 4, spec.num_classes))
     if name == "vit":
-        patch_size = 4
-        embed_dim = 192
-        depth = 4
-        num_heads = 6
-        params = _init_vit_params(
-            key,
-            image_size=spec.image_size,
-            patch_size=patch_size,
-            in_channels=spec.in_channels,
-            embed_dim=embed_dim,
-            depth=depth,
-            num_heads=num_heads,
-            num_classes=spec.num_classes,
+        return hk.transform(
+            lambda x: _haiku_vit(
+                x,
+                image_size=spec.image_size,
+                patch_size=4,
+                in_channels=spec.in_channels,
+                embed_dim=192,
+                depth=4,
+                num_heads=6,
+                num_classes=spec.num_classes,
+            )
         )
-        apply_fn = lambda p, x: _apply_vit(
-            p,
-            x,
-            patch_size=patch_size,
-            num_heads=num_heads,
-            embed_dim=embed_dim,
-        )
-        return params, apply_fn, (spec.in_channels, spec.image_size, spec.image_size)
-
     raise ValueError(f"Unsupported JAX model: {model_name}")
 
 
-def _jax_prepare_batch(x, y, is_image):
-    x_np = x.detach().cpu().numpy().astype(np.float32)
-    y_np = y.detach().cpu().numpy().astype(np.int32)
+def _dummy_input_for_spec(spec):
+    name = spec.model_name.lower()
+    if name in {"mlp", "cnn", "vit"}:
+        return jnp.zeros((1, spec.image_size, spec.image_size, spec.in_channels), dtype=jnp.float32)
+    return jnp.zeros((1, spec.seq_len, spec.seq_input_dim), dtype=jnp.float32)
+
+
+def _multiclass_loss(apply_fn, params, batch):
+    inputs, targets = batch
+    logits = apply_fn(params, inputs)
+    one_hot = jax.nn.one_hot(targets, logits.shape[-1])
+    log_probs = jax.nn.log_softmax(logits)
+    return -jnp.mean(jnp.sum(log_probs * one_hot, axis=-1))
+
+
+def _clipped_grad(loss_fn, params, l2_norm_clip, single_example_batch):
+    inputs, targets = single_example_batch
+    if inputs.ndim in (2, 3):
+        inputs = inputs[None, ...]
+        targets = jnp.reshape(targets, (1,))
+    grads = grad(lambda p: loss_fn(p, (inputs, targets)))(params)
+    nonempty_grads, tree_def = tree_flatten(grads)
+    per_param = jnp.stack([jnp.linalg.norm(g.ravel()) for g in nonempty_grads])
+    total_norm = jnp.linalg.norm(per_param)
+    divisor = jnp.maximum(total_norm / l2_norm_clip, 1.0)
+    normalized = [g / divisor for g in nonempty_grads]
+    return tree_unflatten(tree_def, normalized)
+
+
+def _private_grad_vmap(loss_fn, params, batch, rng, l2_norm_clip, noise_multiplier, batch_size):
+    clipped = vmap(lambda eg: _clipped_grad(loss_fn, params, l2_norm_clip, eg))(batch)
+    clipped_flat, treedef = tree_flatten(clipped)
+    aggregated = [g.sum(0) for g in clipped_flat]
+    rngs = random.split(rng, len(aggregated))
+    noised = [
+        g + l2_norm_clip * noise_multiplier * random.normal(r, g.shape)
+        for r, g in zip(rngs, aggregated)
+    ]
+    normalized = [g / batch_size for g in noised]
+    return tree_unflatten(treedef, normalized)
+
+
+def _private_grad_no_vmap(loss_fn, params, batch, rng, l2_norm_clip, noise_multiplier, batch_size):
+    grads = [_clipped_grad(loss_fn, params, l2_norm_clip, eg) for eg in batch]
+    grads_flat = [tree_flatten(g)[0] for g in grads]
+    treedef = tree_flatten(grads[0])[1]
+    stacked = [jnp.stack([g[i] for g in grads_flat]) for i in range(len(grads_flat[0]))]
+    aggregated = [g.sum(0) for g in stacked]
+    rngs = random.split(rng, len(aggregated))
+    noised = [
+        g + l2_norm_clip * noise_multiplier * random.normal(r, g.shape)
+        for r, g in zip(rngs, aggregated)
+    ]
+    normalized = [g / batch_size for g in noised]
+    return tree_unflatten(treedef, normalized)
+
+
+def _dp_sgd_step_jax_vmap(params, batch, rng, lr, max_grad_norm, noise_multiplier, batch_size, loss_fn):
+    grads = _private_grad_vmap(
+        loss_fn, params, batch, rng, max_grad_norm, noise_multiplier, batch_size
+    )
+    return jax.tree_util.tree_map(lambda p, g: p - lr * g, params, grads)
+
+
+def _dp_sgd_step_jax_no_vmap(params, batch, rng, lr, max_grad_norm, noise_multiplier, batch_size, loss_fn):
+    grads = _private_grad_no_vmap(
+        loss_fn, params, batch, rng, max_grad_norm, noise_multiplier, batch_size
+    )
+    return jax.tree_util.tree_map(lambda p, g: p - lr * g, params, grads)
+
+
+def _prepare_fast_batch(x, y, is_image):
+    if hasattr(x, "detach"):
+        x = x.detach().cpu().numpy()
+    elif hasattr(x, "numpy"):
+        x = x.numpy()
+    if hasattr(y, "detach"):
+        y = y.detach().cpu().numpy()
+    elif hasattr(y, "numpy"):
+        y = y.numpy()
+    x = x.astype(np.float32, copy=False)
+    y = y.astype(np.int64, copy=False)
     if is_image:
-        x_np = np.transpose(x_np, (0, 2, 3, 1))
-    return jnp.asarray(x_np), jnp.asarray(y_np)
+        if x.ndim != 4:
+            raise ValueError(f"Expected 4D input, got shape {x.shape}")
+        if x.shape[-1] not in (1, 3) and x.shape[1] in (1, 3):
+            x = np.transpose(x, (0, 2, 3, 1))
+    return x, y
 
 
-def _jax_dp_step(
-    params,
-    apply_fn,
-    x,
-    y,
-    rng,
-    max_grad_norm,
-    noise_multiplier,
-    lr,
-):
-    def loss_single(p, x_i, y_i):
-        logits = apply_fn(p, x_i[None, ...])[0]
-        loss = -jax.nn.log_softmax(logits)[y_i]
-        return loss
+def _jax_model_factory(model_name, spec, key):
+    require_jax()
+    model = _build_haiku_model(model_name, spec)
+    dummy = _dummy_input_for_spec(spec)
+    params = model.init(key, dummy)
 
-    grad_fn = jax.vmap(jax.grad(loss_single), in_axes=(None, 0, 0))
-    per_sample_grads = grad_fn(params, x, y)
+    def apply_fn(p, x):
+        return model.apply(p, None, x)
 
-    leaves, treedef = jax.tree_util.tree_flatten(per_sample_grads)
-    sq_norms = None
-    for g in leaves:
-        axes = tuple(range(1, g.ndim))
-        g_sq = jnp.sum(g ** 2, axis=axes)
-        sq_norms = g_sq if sq_norms is None else sq_norms + g_sq
-    norms = jnp.sqrt(sq_norms + 1e-12)
-    clip_factors = jnp.minimum(1.0, max_grad_norm / norms)
-
-    def clip_grad(g):
-        reshape = (g.shape[0],) + (1,) * (g.ndim - 1)
-        return g * clip_factors.reshape(reshape)
-
-    clipped = jax.tree_util.tree_map(clip_grad, per_sample_grads)
-    agg = jax.tree_util.tree_map(lambda g: jnp.mean(g, axis=0), clipped)
-
-    noise_std = noise_multiplier * max_grad_norm / x.shape[0]
-    flat_agg, treedef = jax.tree_util.tree_flatten(agg)
-    keys = jax.random.split(rng, len(flat_agg) + 1)
-    new_rng = keys[0]
-    noisy = []
-    for g, k in zip(flat_agg, keys[1:]):
-        if noise_std > 0:
-            g = g + noise_std * jax.random.normal(k, g.shape)
-        noisy.append(g)
-    noisy = jax.tree_util.tree_unflatten(treedef, noisy)
-
-    new_params = jax.tree_util.tree_map(lambda p, g: p - lr * g, params, noisy)
-
-    logits = apply_fn(params, x)
-    preds = jnp.argmax(logits, axis=-1)
-    acc = jnp.mean((preds == y).astype(jnp.float32))
-    loss = jnp.mean(jax.vmap(loss_single, in_axes=(None, 0, 0))(params, x, y))
-
-    return new_params, float(loss), float(acc), new_rng
+    return params, apply_fn, dummy.shape[1:]
 
 
 def train_jax_dp(
@@ -465,71 +285,80 @@ def train_jax_dp(
     lr,
     max_grad_norm,
     noise_multiplier,
+    use_vmap=True,
+    use_jit=True,
 ):
     require_jax()
-    key = jax.random.PRNGKey(0)
+    key = random.PRNGKey(0)
     params, apply_fn, _ = _jax_model_factory(model_name, spec, key)
     is_image = model_name in {"mlp", "cnn", "vit"}
 
-    losses = []
-    accs = []
-    steps = 0
+    def loss_fn(p, batch):
+        return _multiclass_loss(apply_fn, p, batch)
+
+    def step_fn(params, batch, rng):
+        grads = (_private_grad_vmap if use_vmap else _private_grad_no_vmap)(
+            loss_fn, params, batch, rng, max_grad_norm, noise_multiplier, batch[0].shape[0]
+        )
+        return jax.tree_util.tree_map(lambda p, g: p - lr * g, params, grads)
+
+    if use_jit:
+        step_fn = jit(step_fn)
 
     stream = itertools.cycle(train_loader)
     for _ in range(warmup_steps):
         x, y = next(stream)
-        x_jax, y_jax = _jax_prepare_batch(x, y, is_image)
-        params, _, _, key = _jax_dp_step(
-            params,
-            apply_fn,
-            x_jax,
-            y_jax,
-            key,
-            max_grad_norm,
-            noise_multiplier,
-            lr,
-        )
+        x_np, y_np = _prepare_fast_batch(x, y, is_image)
+        x_jax = jax.device_put(x_np)
+        y_jax = jax.device_put(y_np)
+        key = random.fold_in(key, 1)
+        params = step_fn(params, (x_jax, y_jax), key)
 
-    start = time.perf_counter()
+    batch_x = []
+    batch_y = []
     for _ in range(max_steps):
         x, y = next(stream)
-        x_jax, y_jax = _jax_prepare_batch(x, y, is_image)
-        params, loss, acc, key = _jax_dp_step(
-            params,
-            apply_fn,
-            x_jax,
-            y_jax,
-            key,
-            max_grad_norm,
-            noise_multiplier,
-            lr,
-        )
-        losses.append(loss)
-        accs.append(acc)
-        steps += 1
-        if steps >= max_steps:
-            break
+        x_np, y_np = _prepare_fast_batch(x, y, is_image)
+        batch_x.append(x_np)
+        batch_y.append(y_np)
 
+    x_steps = jax.device_put(np.stack(batch_x, axis=0))
+    y_steps = jax.device_put(np.stack(batch_y, axis=0))
+    rngs = random.split(key, max_steps)
+
+    def scan_step(carry, inputs):
+        params = carry
+        x_step, y_step, rng = inputs
+        params = step_fn(params, (x_step, y_step), rng)
+        logits = apply_fn(params, x_step)
+        loss = _multiclass_loss(apply_fn, params, (x_step, y_step))
+        acc = jnp.mean((jnp.argmax(logits, axis=-1) == y_step).astype(jnp.float32))
+        return params, (loss, acc)
+
+    def run_scan(params, xs, ys, rngs):
+        return jax.lax.scan(scan_step, params, (xs, ys, rngs))
+
+    if use_jit:
+        run_scan = jit(run_scan)
+
+    start = time.perf_counter()
+    params, (losses, accs) = run_scan(params, x_steps, y_steps, rngs)
+    jax.block_until_ready(params)
     elapsed = time.perf_counter() - start
 
     test_accs = []
     for x, y in test_loader:
-        x_jax, y_jax = _jax_prepare_batch(x, y, is_image)
+        x_np, y_np = _prepare_fast_batch(x, y, is_image)
+        x_jax = jax.device_put(x_np)
+        y_jax = jax.device_put(y_np)
         logits = apply_fn(params, x_jax)
         preds = jnp.argmax(logits, axis=-1)
         test_accs.append(float(jnp.mean((preds == y_jax).astype(jnp.float32))))
 
     return {
-        "train_loss": float(sum(losses) / max(len(losses), 1)),
-        "train_acc": float(sum(accs) / max(len(accs), 1)),
+        "train_loss": float(jnp.mean(losses)) if max_steps else 0.0,
+        "train_acc": float(jnp.mean(accs)) if max_steps else 0.0,
         "test_acc": float(sum(test_accs) / max(len(test_accs), 1)),
         "seconds": elapsed,
-        "steps": float(steps),
+        "steps": float(max_steps),
     }
-
-
-__all__ = [
-    "jax_available",
-    "require_jax",
-    "train_jax_dp",
-]

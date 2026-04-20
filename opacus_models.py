@@ -3,7 +3,7 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from opacus.layers import DPMultiheadAttention
+from opacus.layers import DPGRU, DPLSTM, DPRNN, DPMultiheadAttention
 
 from custom_models import ModelSpec
 
@@ -55,11 +55,11 @@ class OpacusSequenceClassifier(nn.Module):
         super().__init__()
         layer_type = layer_type.lower()
         if layer_type == "rnn":
-            self.rnn = nn.RNN(input_dim, hidden_dim, batch_first=True)
+            self.rnn = DPRNN(input_dim, hidden_dim, batch_first=True)
         elif layer_type == "lstm":
-            self.rnn = nn.LSTM(input_dim, hidden_dim, batch_first=True)
+            self.rnn = DPLSTM(input_dim, hidden_dim, batch_first=True)
         elif layer_type == "gru":
-            self.rnn = nn.GRU(input_dim, hidden_dim, batch_first=True)
+            self.rnn = DPGRU(input_dim, hidden_dim, batch_first=True)
         else:
             raise ValueError(f"Unsupported layer_type: {layer_type}")
 

@@ -26,3 +26,9 @@ python evaluate.py --datasets mnist,cifar10 --max-steps 10
 python benchmark_layers.py --max-steps 10 --warmup-steps 3
 python vit_benchmark.py --dataset fakedata --max-steps 10 --warmup-steps 3
 ```
+
+
+## References
+https://docs.pytorch.org/docs/stable/func.html
+https://docs.pytorch.org/docs/stable/generated/torch.vmap.html
+https://docs.pytorch.org/tutorials/intermediate/per_sample_grads.html
