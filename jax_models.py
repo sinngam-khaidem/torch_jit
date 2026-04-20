@@ -1,6 +1,5 @@
 import itertools
 import time
-from typing import Callable, Dict, Iterable, List, Tuple
 
 import numpy as np
 import torch
@@ -10,38 +9,37 @@ import jax.numpy as jnp
 from custom_models import ModelSpec
 
 
-def jax_available() -> bool:
+def jax_available():
     return jax is not None and jnp is not None
 
 
-def require_jax() -> None:
+def require_jax():
     if not jax_available():
         raise SystemExit("JAX is required for the 'jax' method. Install jax and jaxlib.")
 
 
-def _init_linear(key: "jax.Array", in_dim: int, out_dim: int, scale: float = 0.02):
+def _init_linear(key, in_dim, out_dim, scale=0.02):
     w_key, _ = jax.random.split(key)
     w = scale * jax.random.normal(w_key, (in_dim, out_dim))
     b = jnp.zeros((out_dim,))
     return {"w": w, "b": b}
 
 
-def _linear(params: Dict[str, "jax.Array"], x: "jax.Array") -> "jax.Array":
+def _linear(params, x):
     return x @ params["w"] + params["b"]
 
 
-def _layer_norm(params: Dict[str, "jax.Array"], x: "jax.Array", eps: float = 1e-5) -> "jax.Array":
+def _layer_norm(params, x, eps=1e-5):
     mean = jnp.mean(x, axis=-1, keepdims=True)
     var = jnp.mean((x - mean) ** 2, axis=-1, keepdims=True)
     return (x - mean) / jnp.sqrt(var + eps) * params["g"] + params["b"]
 
 
-def _init_layer_norm(key: "jax.Array", dim: int) -> Dict[str, "jax.Array"]:
-    del key
+def _init_layer_norm(key, dim):
     return {"g": jnp.ones((dim,)), "b": jnp.zeros((dim,))}
 
 
-def _conv2d(params: Dict[str, "jax.Array"], x: "jax.Array", stride: int = 1) -> "jax.Array":
+def _conv2d(params, x, stride=1):
     y = jax.lax.conv_general_dilated(
         x,
         params["w"],
@@ -52,7 +50,7 @@ def _conv2d(params: Dict[str, "jax.Array"], x: "jax.Array", stride: int = 1) -> 
     return y + params["b"]
 
 
-def _max_pool(x: "jax.Array", size: int = 2, stride: int = 2) -> "jax.Array":
+def _max_pool(x, size=2, stride=2):
     return jax.lax.reduce_window(
         x,
         -jnp.inf,
@@ -63,7 +61,7 @@ def _max_pool(x: "jax.Array", size: int = 2, stride: int = 2) -> "jax.Array":
     )
 
 
-def _init_mlp_params(key: "jax.Array", input_shape: Tuple[int, int, int], num_classes: int):
+def _init_mlp_params(key, input_shape, num_classes):
     c, h, w = input_shape
     in_features = c * h * w
     k1, k2, k3 = jax.random.split(key, 3)
@@ -74,14 +72,14 @@ def _init_mlp_params(key: "jax.Array", input_shape: Tuple[int, int, int], num_cl
     }
 
 
-def _apply_mlp(params: Dict[str, Dict[str, "jax.Array"]], x: "jax.Array") -> "jax.Array":
+def _apply_mlp(params, x):
     x = x.reshape((x.shape[0], -1))
     x = jax.nn.relu(_linear(params["fc1"], x))
     x = jax.nn.relu(_linear(params["fc2"], x))
     return _linear(params["fc3"], x)
 
 
-def _init_cnn_params(key: "jax.Array", in_channels: int, image_size: int, num_classes: int):
+def _init_cnn_params(key, in_channels, image_size, num_classes):
     k1, k2, k3, k4 = jax.random.split(key, 4)
     pooled = image_size // 4
     return {
@@ -92,7 +90,7 @@ def _init_cnn_params(key: "jax.Array", in_channels: int, image_size: int, num_cl
     }
 
 
-def _apply_cnn(params: Dict[str, Dict[str, "jax.Array"]], x: "jax.Array") -> "jax.Array":
+def _apply_cnn(params, x):
     x = jax.nn.relu(_conv2d(params["conv1"], x))
     x = _max_pool(x, 2, 2)
     x = jax.nn.relu(_conv2d(params["conv2"], x))
@@ -102,7 +100,7 @@ def _apply_cnn(params: Dict[str, Dict[str, "jax.Array"]], x: "jax.Array") -> "ja
     return _linear(params["fc2"], x)
 
 
-def _init_rnn_params(key: "jax.Array", input_dim: int, hidden_dim: int, num_classes: int):
+def _init_rnn_params(key, input_dim, hidden_dim, num_classes):
     k1, k2, k3, k4 = jax.random.split(key, 4)
     return {
         "rnn": {
@@ -115,7 +113,7 @@ def _init_rnn_params(key: "jax.Array", input_dim: int, hidden_dim: int, num_clas
     }
 
 
-def _apply_rnn(params: Dict[str, Dict[str, "jax.Array"]], x: "jax.Array") -> "jax.Array":
+def _apply_rnn(params, x):
     wx = params["rnn"]["wx"]
     wh = params["rnn"]["wh"]
     b = params["rnn"]["b"]
@@ -132,7 +130,7 @@ def _apply_rnn(params: Dict[str, Dict[str, "jax.Array"]], x: "jax.Array") -> "ja
     return _linear(params["head"], h_final)
 
 
-def _init_gru_params(key: "jax.Array", input_dim: int, hidden_dim: int, num_classes: int):
+def _init_gru_params(key, input_dim, hidden_dim, num_classes):
     k1, k2, k3 = jax.random.split(key, 3)
     return {
         "gru": {
@@ -144,7 +142,7 @@ def _init_gru_params(key: "jax.Array", input_dim: int, hidden_dim: int, num_clas
     }
 
 
-def _apply_gru(params: Dict[str, Dict[str, "jax.Array"]], x: "jax.Array") -> "jax.Array":
+def _apply_gru(params, x):
     wx = params["gru"]["wx"]
     wh = params["gru"]["wh"]
     b = params["gru"]["b"]
@@ -168,7 +166,7 @@ def _apply_gru(params: Dict[str, Dict[str, "jax.Array"]], x: "jax.Array") -> "ja
     return _linear(params["head"], h_final)
 
 
-def _init_lstm_params(key: "jax.Array", input_dim: int, hidden_dim: int, num_classes: int):
+def _init_lstm_params(key, input_dim, hidden_dim, num_classes):
     k1, k2, k3 = jax.random.split(key, 3)
     return {
         "lstm": {
@@ -180,7 +178,7 @@ def _init_lstm_params(key: "jax.Array", input_dim: int, hidden_dim: int, num_cla
     }
 
 
-def _apply_lstm(params: Dict[str, Dict[str, "jax.Array"]], x: "jax.Array") -> "jax.Array":
+def _apply_lstm(params, x):
     wx = params["lstm"]["wx"]
     wh = params["lstm"]["wh"]
     b = params["lstm"]["b"]
@@ -205,7 +203,7 @@ def _apply_lstm(params: Dict[str, Dict[str, "jax.Array"]], x: "jax.Array") -> "j
     return _linear(params["head"], h_final)
 
 
-def _init_mha_params(key: "jax.Array", input_dim: int, embed_dim: int, num_heads: int, num_classes: int):
+def _init_mha_params(key, input_dim, embed_dim, num_heads, num_classes):
     k1, k2, k3, k4, k5 = jax.random.split(key, 5)
     return {
         "q": _init_linear(k1, input_dim, embed_dim),
@@ -216,7 +214,7 @@ def _init_mha_params(key: "jax.Array", input_dim: int, embed_dim: int, num_heads
     }
 
 
-def _apply_mha(params: Dict[str, Dict[str, "jax.Array"]], x: "jax.Array", num_heads: int) -> "jax.Array":
+def _apply_mha(params, x, num_heads):
     embed_dim = params["o"]["w"].shape[0]
     head_dim = embed_dim // num_heads
 
@@ -245,14 +243,14 @@ def _apply_mha(params: Dict[str, Dict[str, "jax.Array"]], x: "jax.Array", num_he
 
 
 def _init_vit_params(
-    key: "jax.Array",
-    image_size: int,
-    patch_size: int,
-    in_channels: int,
-    embed_dim: int,
-    depth: int,
-    num_heads: int,
-    num_classes: int,
+    key,
+    image_size,
+    patch_size,
+    in_channels,
+    embed_dim,
+    depth,
+    num_heads,
+    num_classes,
 ):
     keys = jax.random.split(key, 4 + depth * 8)
     num_patches = (image_size // patch_size) ** 2
@@ -282,12 +280,12 @@ def _init_vit_params(
 
 
 def _apply_vit(
-    params: Dict[str, object],
-    x: "jax.Array",
-    patch_size: int,
-    num_heads: int,
-    embed_dim: int,
-) -> "jax.Array":
+    params,
+    x,
+    patch_size,
+    num_heads,
+    embed_dim,
+):
     b, h, w, c = x.shape
     p = patch_size
     x = x.reshape(b, h // p, p, w // p, p, c)
@@ -334,10 +332,17 @@ def _apply_vit(
 
 
 def _jax_model_factory(
-    model_name: str,
-    spec: ModelSpec,
-    key: "jax.Array",
-) -> Tuple[Dict[str, object], Callable[[Dict[str, object], "jax.Array"], "jax.Array"], Tuple[int, ...]]:
+    model_name,
+    spec,
+    key,
+):
+    
+    """
+    Args:
+    - model_name: One of "mlp", "cnn", "rnn", "lstm", "gru", "mha", "vit"
+    - spec: ModelSpec object with appropriate fields filled based on model type
+    - key: JAX random key for parameter initialization
+    """
     name = model_name.lower()
 
     if name == "mlp":
@@ -387,7 +392,7 @@ def _jax_model_factory(
     raise ValueError(f"Unsupported JAX model: {model_name}")
 
 
-def _jax_prepare_batch(x: torch.Tensor, y: torch.Tensor, is_image: bool) -> Tuple["jax.Array", "jax.Array"]:
+def _jax_prepare_batch(x, y, is_image):
     x_np = x.detach().cpu().numpy().astype(np.float32)
     y_np = y.detach().cpu().numpy().astype(np.int32)
     if is_image:
@@ -396,15 +401,15 @@ def _jax_prepare_batch(x: torch.Tensor, y: torch.Tensor, is_image: bool) -> Tupl
 
 
 def _jax_dp_step(
-    params: Dict[str, object],
-    apply_fn: Callable[[Dict[str, object], "jax.Array"], "jax.Array"],
-    x: "jax.Array",
-    y: "jax.Array",
-    rng: "jax.Array",
-    max_grad_norm: float,
-    noise_multiplier: float,
-    lr: float,
-) -> Tuple[Dict[str, object], float, float, "jax.Array"]:
+    params,
+    apply_fn,
+    x,
+    y,
+    rng,
+    max_grad_norm,
+    noise_multiplier,
+    lr,
+):
     def loss_single(p, x_i, y_i):
         logits = apply_fn(p, x_i[None, ...])[0]
         loss = -jax.nn.log_softmax(logits)[y_i]
@@ -451,23 +456,23 @@ def _jax_dp_step(
 
 
 def train_jax_dp(
-    model_name: str,
-    spec: ModelSpec,
-    train_loader: Iterable,
-    test_loader: Iterable,
-    max_steps: int,
-    warmup_steps: int,
-    lr: float,
-    max_grad_norm: float,
-    noise_multiplier: float,
-) -> Dict[str, object]:
+    model_name,
+    spec,
+    train_loader,
+    test_loader,
+    max_steps,
+    warmup_steps,
+    lr,
+    max_grad_norm,
+    noise_multiplier,
+):
     require_jax()
     key = jax.random.PRNGKey(0)
     params, apply_fn, _ = _jax_model_factory(model_name, spec, key)
     is_image = model_name in {"mlp", "cnn", "vit"}
 
-    losses: List[float] = []
-    accs: List[float] = []
+    losses = []
+    accs = []
     steps = 0
 
     stream = itertools.cycle(train_loader)

@@ -63,7 +63,7 @@ def rnn_layer(
     for t in range(T):
         combined = torch.cat([x[:, t], h], dim=-1)
 
-        # 🔥 single fused matmul (TorchScript-friendly)
+        # single fused matmul (TorchScript-friendly)
         h = combined @ W + b
 
         h = torch.tanh(h) if use_tanh else torch.relu(h)
@@ -104,7 +104,7 @@ def lstm_layer(
     for t in range(T):
         combined = torch.cat([x[:, t], h], dim=-1)
 
-        # 🔥 single fused matmul
+        # single fused matmul
         gates = combined @ W + b
 
         i, f, g, o = gates.chunk(4, dim=-1)
@@ -142,7 +142,7 @@ def gru_layer(
     for t in range(T):
         combined = torch.cat([x[:, t], h], dim=-1)
 
-        # 🔥 single fused matmul
+        # single fused matmul
         gates = combined @ W + b
 
         r, z, n = gates.chunk(3, dim=-1)
