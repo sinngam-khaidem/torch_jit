@@ -283,7 +283,6 @@ class CustomPrivacyEngine:
                 #print(f"Used compiled DP step for clip_mode={clip_mode}")
             except Exception as e:
                 print(f"Compiled DP step failed for clip_mode={clip_mode}, falling back to eager. Exception: {e}")
-                print(e.print_stack())
                 self._compiled_step_failed.add(clip_mode)
                 used_compiled = False
 
