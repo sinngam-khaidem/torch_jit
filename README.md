@@ -34,3 +34,5 @@ https://docs.pytorch.org/docs/stable/func.html
 https://docs.pytorch.org/docs/stable/generated/torch.vmap.html
 
 https://docs.pytorch.org/tutorials/intermediate/per_sample_grads.html
+
+# https://pytorch.org/blog/optimizing-cuda-rnn-with-torchscript/
