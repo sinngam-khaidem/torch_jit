@@ -79,69 +79,6 @@ def _haiku_lstm(features, hidden_dim, num_classes):
     return hk.Linear(num_classes)(h_final)
 
 
-def _haiku_mha(features, embed_dim, num_heads, num_classes):
-    x = hk.Linear(embed_dim)(features)
-    key_size = max(1, embed_dim // num_heads)
-    attn = hk.MultiHeadAttention(
-        num_heads=num_heads,
-        key_size=key_size,
-        model_size=embed_dim,
-        w_init=hk.initializers.VarianceScaling(1.0, "fan_avg", "uniform"),
-    )
-    x = attn(x, x, x)
-    x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(x)
-    pooled = jnp.mean(x, axis=1)
-    return hk.Linear(num_classes)(pooled)
-
-
-def _haiku_vit(
-    features,
-    image_size,
-    patch_size,
-    in_channels,
-    embed_dim,
-    depth,
-    num_heads,
-    num_classes,
-):
-    if image_size % patch_size != 0:
-        raise ValueError("image_size must be divisible by patch_size")
-
-    x = hk.Conv2D(embed_dim, kernel_shape=patch_size, stride=patch_size, padding="VALID")(features)
-    x = x.reshape((x.shape[0], -1, embed_dim))
-    num_patches = x.shape[1]
-
-    cls = hk.get_parameter("cls", shape=(1, 1, embed_dim), init=hk.initializers.TruncatedNormal(stddev=0.02))
-    pos = hk.get_parameter(
-        "pos",
-        shape=(1, num_patches + 1, embed_dim),
-        init=hk.initializers.TruncatedNormal(stddev=0.02),
-    )
-    cls = jnp.repeat(cls, x.shape[0], axis=0)
-    x = jnp.concatenate([cls, x], axis=1)
-    x = x + pos[:, : x.shape[1], :]
-
-    for i in range(depth):
-        x_norm = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True, name=f"ln1_{i}")(x)
-        key_size = max(1, embed_dim // num_heads)
-        attn = hk.MultiHeadAttention(
-            num_heads=num_heads,
-            key_size=key_size,
-            model_size=embed_dim,
-            name=f"attn_{i}",
-            w_init=hk.initializers.VarianceScaling(1.0, "fan_avg", "uniform"),
-        )
-        x = x + attn(x_norm, x_norm, x_norm)
-
-        y = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True, name=f"ln2_{i}")(x)
-        y = hk.Linear(embed_dim * 4, name=f"mlp1_{i}")(y)
-        y = jax.nn.gelu(y)
-        y = hk.Linear(embed_dim, name=f"mlp2_{i}")(y)
-        x = x + y
-
-    x = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True, name="ln_out")(x)
-    return hk.Linear(num_classes, name="head")(x[:, 0])
-
 
 def _build_haiku_model(model_name, spec):
     name = model_name.lower()
@@ -155,21 +92,7 @@ def _build_haiku_model(model_name, spec):
         return hk.transform(lambda x: _haiku_gru(x, spec.seq_hidden_dim, spec.num_classes))
     if name == "lstm":
         return hk.transform(lambda x: _haiku_lstm(x, spec.seq_hidden_dim, spec.num_classes))
-    if name == "mha":
-        return hk.transform(lambda x: _haiku_mha(x, spec.seq_hidden_dim, 4, spec.num_classes))
-    if name == "vit":
-        return hk.transform(
-            lambda x: _haiku_vit(
-                x,
-                image_size=spec.image_size,
-                patch_size=4,
-                in_channels=spec.in_channels,
-                embed_dim=192,
-                depth=4,
-                num_heads=6,
-                num_classes=spec.num_classes,
-            )
-        )
+    
     raise ValueError(f"Unsupported JAX model: {model_name}")
 
 
