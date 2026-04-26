@@ -1,28 +1,55 @@
-# JIT Accelerated DP-SGD in PyTorch
+# JIT-Accelerated DP-SGD in PyTorch
 
-VMAP + `torch.compile` DP-SGD pipeline.
+A high-performance implementation of Differentially Private Stochastic Gradient Descent (DP-SGD)
+for PyTorch, combining `torch.func.vmap` with `torch.compile` to eliminate the traditional
+privacy tax on training speed.
 
-- We implemented JIT and VMAP based DPSGD Update that integrates with most of the existing components/modules within PyTorch.
-- Custom layers/models of MLP, CNN, RNN, GRU, LSTM for JIT compatibility.
-- Contains scripts for accuracy and privacy accounting.
+This project is a PyTorch extension of Subramani et al. (2021), who demonstrated that
+vectorization and JIT compilation can mostly eliminate DP-SGD runtime overhead in JAX and
+TensorFlow. We port their methodology to the modern PyTorch 2.x ecosystem using TorchInductor
+as the compiler backend.
 
-**Note: JIT Compilation for RNN, GRU, LSTM only works on CUDA.**
-**All evaluation results are in results.ipynb**
+## Overview
 
-The main class `CustomPrivacyEngine` is defined in `torch_privacy.py` & you can check our evaluation results within `results.ipynb`
-## Running guide
+The core of this project is the `CustomPrivacyEngine` class (`torch_privacy.py`), which offers
+two operational modes:
+
+- **Eager mode** (`custom_eager`): Per-sample gradients via `vmap(grad(f))` without compilation.
+  Portable across CUDA, CPU, and MPS devices.
+- **Compiled mode** (`custom_compiled`): The entire DP-SGD update step — including vmap,
+  clipping, noise injection, and parameter update — is wrapped in a single `torch.compile`
+  region for maximum performance. **Requires CUDA for RNN, GRU, and LSTM architectures.**
+
+Custom JIT-compatible implementations are provided for MLP, CNN, RNN, GRU, and LSTM. Standard
+PyTorch `nn.RNN`/`nn.LSTM`/`nn.GRU` modules use opaque cuDNN backends that are incompatible
+with `torch.func` transforms, so these have been reimplemented as pure functional loops amenable
+to both `vmap` and kernel fusion by TorchInductor.
+
+Evaluation results and timing comparisons across backends are available in `results.ipynb`.
+
+## Getting Started
+
+Install dependencies:
 
 ```bash
-python evaluate.py --datasets mnist,cifar10 --max-steps 10
-python benchmark_layers.py --max-steps 10 --warmup-steps 3
+pip install -r requirements.txt
 ```
 
+Run the image classification benchmark (MNIST and CIFAR-10):
+
+```bash
+python evaluate.py --datasets mnist,cifar10 --max-steps 100
+```
+
+Run the sequential model benchmark (RNN, GRU, LSTM):
+
+```bash
+python benchmark_layers.py --max-steps 100 --warmup-steps 5
+```
 
 ## References
-https://docs.pytorch.org/docs/stable/func.html
 
-https://docs.pytorch.org/docs/stable/generated/torch.vmap.html
-
-https://docs.pytorch.org/tutorials/intermediate/per_sample_grads.html
-
-https://pytorch.org/blog/optimizing-cuda-rnn-with-torchscript/
+- Subramani, Vadivelu & Kamath. [Enabling Fast Differentially Private SGD via Just-in-Time Compilation and Vectorization.](https://arxiv.org/abs/2010.09063) NeurIPS 2021.
+- PyTorch `torch.func` documentation: https://docs.pytorch.org/docs/stable/func.html
+- PyTorch per-sample gradients tutorial: https://docs.pytorch.org/tutorials/intermediate/per_sample_grads.html
+- Optimizing CUDA RNNs with TorchScript: https://pytorch.org/blog/optimizing-cuda-rnn-with-torchscript/s̄
