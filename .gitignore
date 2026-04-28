@@ -1,3 +1,4 @@
 data/
 __pycache__/
-notebooks/__pycache__/
+inotebooks/__pycache__/
+.env
