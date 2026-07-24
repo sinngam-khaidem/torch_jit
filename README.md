@@ -25,7 +25,7 @@ PyTorch `nn.RNN`/`nn.LSTM`/`nn.GRU` modules use opaque cuDNN backends that are i
 with `torch.func` transforms, so these have been reimplemented as pure functional loops amenable
 to both `vmap` and kernel fusion by TorchInductor.
 
-Evaluation results and timing comparisons across backends are available in `results.ipynb`.
+Evaluation results and timing comparisons across backends are available in `notebooks/results.ipynb`.
 
 ## Getting Started
 
