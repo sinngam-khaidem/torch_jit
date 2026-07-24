@@ -1,4 +1,4 @@
 data/
 __pycache__/
 inotebooks/__pycache__/
-/.env
+.env

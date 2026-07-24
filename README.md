@@ -35,18 +35,6 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Run the image classification benchmark (MNIST and CIFAR-10):
-
-```bash
-python evaluate.py --datasets mnist,cifar10 --max-steps 100
-```
-
-Run the sequential model benchmark (RNN, GRU, LSTM):
-
-```bash
-python benchmark_layers.py --max-steps 100 --warmup-steps 5
-```
-
 ## References
 
 - Subramani, Vadivelu & Kamath. [Enabling Fast Differentially Private SGD via Just-in-Time Compilation and Vectorization.](https://arxiv.org/abs/2010.09063) NeurIPS 2021.
