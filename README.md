@@ -13,14 +13,13 @@ the compiler backend.
 
 ## Working.
 
-Everything lives in `CustomPrivacyEngine` (`torch_privacy.py`). It has two modes:
+`CustomPrivacyEngine` has two modes:
 
 | Mode | What it does | Where it runs |
 |---|---|---|
 | `custom_eager` | Per-sample gradients via `vmap(grad(f))`, no compilation | CUDA, CPU, MPS |
 | `custom_compiled` | vmap + clipping + noise + parameter update, all inside one `torch.compile` region | CUDA (required for RNN / GRU / LSTM) |
 
-One call does the whole private step:
 
 ```python
 from torch_privacy import CustomPrivacyEngine, DPConfig
